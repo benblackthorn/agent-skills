@@ -1,0 +1,4 @@
+interface:
+  display_name: "Progress Log"
+  short_description: "Transactional, bounded repository working memory."
+  default_prompt: "Read or update this repository's selected progress log through its validated CLI, preserving identities, current truth, Git-proved compaction, and safety boundaries."
