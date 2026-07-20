@@ -49,12 +49,14 @@ gh skill install benblackthorn/agent-skills <skill-name> \
 For Claude Code, replace `codex` with `claude-code`. Use `--all` only when you
 have reviewed and want every skill in the collection.
 
-An unversioned install follows the repository’s latest release or default
-branch. Pin an exact reviewed commit for a reproducible installation:
+GitHub releases are complete catalog snapshots, not independent versions of
+individual skills. An unversioned install resolves the latest catalog release
+first, falling back to the default branch when the repository has no release.
+Pin an exact catalog tag or reviewed commit for a reproducible installation:
 
 ```bash
 gh skill install benblackthorn/agent-skills <skill-name> \
-  --pin <commit-sha> --agent codex --scope user
+  --pin <tag-or-commit> --agent codex --scope user
 ```
 
 The open `skills` CLI is also supported:
@@ -95,7 +97,9 @@ skill bytes requires fresh evidence and approval before another release.
 Pull requests that propose skill changes are welcome, but accepted behavior is
 reproduced and verified in the authoritative source before it is projected
 here. Repository documentation and community-policy corrections can be made
-directly in this repository.
+directly in this repository. A new catalog release is published only when the
+mirrored skill set or installed skill bytes change; documentation, workflow,
+and other repository-only maintenance can advance `main` without a new tag.
 
 ## Project policies
 
