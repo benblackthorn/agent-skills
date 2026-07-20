@@ -1,0 +1,114 @@
+name: Validate mirror
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package integrity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out mirror
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned GitHub CLI
+        shell: bash
+        run: |
+          archive="$RUNNER_TEMP/gh_2.96.0_linux_amd64.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_linux_amd64.tar.gz \
+            --output "$archive"
+          echo "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60  $archive" \
+            | sha256sum --check --status
+          echo "$RUNNER_TEMP/gh_2.96.0_linux_amd64/bin" >> "$GITHUB_PATH"
+
+      - name: Check package discovery and changed bytes
+        shell: bash
+        env:
+          CHECK_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          CHECK_HEAD: ${{ github.sha }}
+        run: |
+          if [[ -z "$CHECK_BASE" || "$CHECK_BASE" =~ ^0+$ ]]; then
+            empty_tree="$(git mktree </dev/null)"
+            git diff --check "$empty_tree" "$CHECK_HEAD"
+          else
+            git diff --check "$CHECK_BASE" "$CHECK_HEAD"
+          fi
+          gh skill publish --dry-run
+
+      - name: Match manifest audience to repository visibility
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          audience="$(python3 -c 'import json; print(json.load(open("release-manifest.json"))["audience"])')"
+          visibility="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)"
+          if [[ "$audience" != "$visibility" ]]; then
+            echo "release-manifest audience '$audience' does not match repository visibility '$visibility'" >&2
+            exit 1
+          fi
+
+      - name: Check out the pinned remek verifier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: benblackthorn/remek
+          ref: 21fc6985c492a92fff13c9ae4e716f84b83ce57a
+          path: .tmp/remek-verifier
+          persist-credentials: false
+
+      - name: Verify the release manifest
+        run: >-
+          python3 -I -S -B
+          .tmp/remek-verifier/tools/verify_release_manifest.py
+          "$GITHUB_WORKSPACE"
+
+  runtime:
+    name: Runtime smoke (Python ${{ matrix.python }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python:
+          - "3.11"
+          - "3.14"
+    steps:
+      - name: Check out mirror
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Exercise the shipped skill
+        shell: bash
+        run: |
+          repo="$(mktemp -d)"
+          git -C "$repo" init --initial-branch=main
+          git -C "$repo" config user.name "Agent Skills CI"
+          git -C "$repo" config user.email "agent-skills-ci@users.noreply.github.com"
+          python3 -I -S -B skills/progress-log/scripts/progress_log.py ensure "$repo"
+          python3 -I -S -B skills/progress-log/scripts/progress_log.py validate "$repo"
+          python3 -I -S -B skills/progress-log/scripts/progress_log.py record "$repo" \
+            --title "Runtime smoke passed" \
+            --body "The installed CLI completed a bounded write." \
+            --key "runtime-smoke"
+          python3 -I -S -B skills/progress-log/scripts/progress_log.py validate "$repo"
