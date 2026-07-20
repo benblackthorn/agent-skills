@@ -10,6 +10,11 @@ This repository follows the open [Agent Skills](https://agentskills.io/)
 format and supports hosts including Codex, Claude Code, GitHub Copilot, Cursor,
 and other compatible agents.
 
+**Building your own skill library?** These skills install and run independently.
+They are reviewed and prepared for release with [remek](https://remek.dev/)
+([source](https://github.com/benblackthorn/remek)), the open-source governance
+and release layer for Agent Skills.
+
 ## Skills
 
 ### [progress-log](skills/progress-log/)
@@ -82,12 +87,11 @@ and carries only the material required to perform it reliably.
 
 ## Release integrity
 
-Skills are reviewed and released with
-[remek](https://github.com/benblackthorn/remek) from a separate governed source.
-remek binds exact skill bytes to provenance, evidence, approval, and the
-intended distribution before projecting them here. This repository is the
-consumer-facing projection and intentionally excludes private governance
-records, evaluation traces, and approvals.
+The released catalog payload is projected with [remek](https://remek.dev/) from
+a separate governed source. remek binds exact skill bytes to provenance,
+evidence, approval, and the intended distribution before projecting them here.
+This repository is the consumer-facing projection and intentionally excludes
+private governance records, evaluation traces, and approvals.
 
 [`release-manifest.json`](release-manifest.json) binds the projected payload,
 source identity, and mirror lineage. Its digests identify exact bytes; they are
