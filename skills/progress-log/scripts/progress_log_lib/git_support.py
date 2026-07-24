@@ -1,7 +1,3 @@
-"""Raw-Git compaction proof."""
-
-from __future__ import annotations
-
 import os
 import re
 import selectors
@@ -20,6 +16,7 @@ GIT_TIMEOUT_SECONDS = 20.0
 _OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _GIT_VERSION_RE = re.compile(
     r"git version ([0-9]{1,4})\.([0-9]{1,4})(?:\.([0-9]{1,4}))?"
+    r"(?:[ .+(\-][ -~]{0,79})?"
 )
 
 
@@ -37,6 +34,10 @@ class ResolvedGit:
     path: str
 
 
+def _policy(message: str) -> Failure:
+    return Failure(message, EXIT_POLICY)
+
+
 def _inside(path: Path, root: Path) -> bool:
     return path == root or path.is_relative_to(root)
 
@@ -44,62 +45,58 @@ def _inside(path: Path, root: Path) -> bool:
 def _resolve_git(root: Path) -> ResolvedGit:
     raw_path = os.environ.get("PATH")
     if raw_path is None:
-        raise Failure("PATH is required to select Git safely", EXIT_POLICY)
-    entries = raw_path.split(os.pathsep)
-
+        raise _policy("PATH is required to select Git safely")
     directories: list[Path] = []
     executable: Path | None = None
-    for value in entries:
+    for value in raw_path.split(os.pathsep):
         if not value or not Path(value).is_absolute():
             continue
         selected = Path(value)
         try:
             canonical = selected.resolve(strict=True)
-            directory_info = canonical.lstat()
         except (OSError, RuntimeError):
             continue
         if (
-            not stat.S_ISDIR(directory_info.st_mode)
+            not canonical.is_dir()
             or _inside(selected, root)
             or _inside(canonical, root)
         ):
             continue
         candidate = canonical / "git"
+        target = None
         try:
             candidate.lstat()
         except FileNotFoundError:
-            if canonical not in directories:
-                directories.append(canonical)
-            continue
+            pass
         except OSError:
             continue
-        try:
-            target = candidate.resolve(strict=True)
-            target_info = target.lstat()
-        except (OSError, RuntimeError):
-            continue
-        if (
-            _inside(target, root)
-            or not stat.S_ISREG(target_info.st_mode)
-            or target_info.st_nlink != 1
-            or not os.access(target, os.X_OK)
-        ):
-            continue
+        else:
+            try:
+                target = candidate.resolve(strict=True)
+                target_info = target.lstat()
+            except (OSError, RuntimeError):
+                continue
+            if (
+                _inside(target, root)
+                or not stat.S_ISREG(target_info.st_mode)
+                or target_info.st_nlink != 1
+                or not os.access(target, os.X_OK)
+            ):
+                continue
         if canonical not in directories:
             directories.append(canonical)
-        if executable is None:
+        if executable is None and target is not None:
             executable = target
 
     if executable is None:
-        raise Failure(
-            "no safe Git 2.45+ executable was found in PATH; unsafe candidates were filtered",
-            EXIT_POLICY,
+        raise _policy(
+            "no safe Git 2.45+ executable was found in PATH; unsafe candidates were filtered"
         )
     return ResolvedGit(executable, os.pathsep.join(str(path) for path in directories))
 
 
 def _git_environment(resolved: ResolvedGit) -> dict[str, str]:
-    environment = {
+    return {
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_SYSTEM": os.devnull,
@@ -116,9 +113,8 @@ def _git_environment(resolved: ResolvedGit) -> dict[str, str]:
         "XDG_CONFIG_HOME": os.devnull,
         "LC_ALL": "C",
         "LANG": "C",
+        "PATH": resolved.path,
     }
-    environment["PATH"] = resolved.path
-    return environment
 
 
 def _terminate(process: subprocess.Popen[bytes]) -> None:
@@ -137,6 +133,7 @@ def _run_git(
     stdout_limit: int = MAX_CONTROL_OUTPUT,
     resolved: ResolvedGit | None = None,
     repository: bool = True,
+    allow_one: bool = False,
 ) -> bytes:
     selected = resolved or _resolve_git(root)
     command = [str(selected.executable)]
@@ -164,38 +161,29 @@ def _run_git(
             env=_git_environment(selected),
         )
     except OSError:
-        raise Failure("Git 2.45+ is unavailable", EXIT_POLICY) from None
+        raise _policy("Git 2.45+ is unavailable") from None
     if process.stdout is None or process.stderr is None:
-        raise Failure("Git pipe setup failed", EXIT_POLICY)
-    stdout_descriptor = process.stdout.fileno()
-    streams = {
-        stdout_descriptor: (process.stdout, bytearray(), stdout_limit),
-        process.stderr.fileno(): (
-            process.stderr,
-            bytearray(),
-            MAX_DIAGNOSTIC_OUTPUT,
-        ),
-    }
+        raise _policy("Git pipe setup failed")
+    stdout = bytearray()
+    streams = (
+        (process.stdout, stdout, stdout_limit),
+        (process.stderr, bytearray(), MAX_DIAGNOSTIC_OUTPUT),
+    )
     selector = selectors.DefaultSelector()
-    for descriptor, (stream, _, _) in streams.items():
-        os.set_blocking(descriptor, False)
-        selector.register(stream, selectors.EVENT_READ, descriptor)
-    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
     try:
+        for stream, output, limit in streams:
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, (stream, output, limit))
+        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _terminate(process)
-                raise Failure("Git compaction proof timed out", EXIT_POLICY)
-            events = selector.select(min(remaining, 0.25))
-            if not events:
-                continue
-            for key, _ in events:
-                descriptor = key.data
-                stream, output, limit = streams[descriptor]
+                raise subprocess.TimeoutExpired(command, GIT_TIMEOUT_SECONDS)
+            for key, _ in selector.select(min(remaining, 0.25)):
+                stream, output, limit = key.data
                 amount = max(1, min(65_536, limit + 1 - len(output)))
                 try:
-                    chunk = os.read(descriptor, amount)
+                    chunk = os.read(stream.fileno(), amount)
                 except BlockingIOError:
                     continue
                 if not chunk:
@@ -205,56 +193,43 @@ def _run_git(
                 output.extend(chunk)
                 if len(output) > limit:
                     _terminate(process)
-                    raise Failure(
-                        "Git compaction proof exceeded its output bound", EXIT_POLICY
-                    )
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _terminate(process)
-            raise Failure("Git compaction proof timed out", EXIT_POLICY)
-        returncode = process.wait(timeout=remaining)
+                    raise _policy("Git compaction proof exceeded its output bound")
+        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:
         _terminate(process)
-        raise Failure("Git compaction proof timed out", EXIT_POLICY) from None
+        raise _policy("Git compaction proof timed out") from None
     finally:
         selector.close()
-        for stream, _, _ in streams.values():
+        for stream, _, _ in streams:
             if not stream.closed:
                 stream.close()
+    if returncode == 1 and allow_one:
+        return bytes(stdout)
     if returncode != 0:
-        raise Failure(
-            "Git 2.45+ cannot verify the requested repository data", EXIT_POLICY
-        )
-    return bytes(streams[stdout_descriptor][1])
+        raise _policy("Git 2.45+ cannot verify the requested repository data")
+    return bytes(stdout)
 
 
 def _one_line(output: bytes, label: str, *, filesystem: bool = False) -> str:
     value = output.removesuffix(b"\n")
     if not value or b"\n" in value or b"\r" in value or b"\0" in value:
-        raise Failure(f"Git returned an invalid {label}", EXIT_POLICY)
+        raise _policy(f"Git returned an invalid {label}")
     if filesystem:
         return os.fsdecode(value)
     try:
         return value.decode("ascii", errors="strict")
     except UnicodeDecodeError:
-        raise Failure(f"Git returned an invalid {label}", EXIT_POLICY) from None
+        raise _policy(f"Git returned an invalid {label}") from None
 
 
 def _validate_git_version(output: bytes) -> None:
     value = _one_line(output, "version")
-    match = _GIT_VERSION_RE.match(value)
+    match = _GIT_VERSION_RE.fullmatch(value)
     if match is None:
-        raise Failure("Git 2.45+ returned an invalid version", EXIT_POLICY)
-    suffix = value[match.end() :]
-    if suffix and (
-        len(suffix) > 80
-        or suffix[0] not in " .+-\u0028"
-        or any(ord(character) < 32 or ord(character) > 126 for character in suffix)
-    ):
-        raise Failure("Git 2.45+ returned an invalid version", EXIT_POLICY)
+        raise _policy("Git 2.45+ returned an invalid version")
     version = tuple(int(part or "0") for part in match.groups())
     if version < (2, 45, 0):
-        raise Failure("Git 2.45+ is required", EXIT_POLICY)
+        raise _policy("Git 2.45+ is required")
 
 
 def _head_oid(root: Path) -> str:
@@ -262,7 +237,7 @@ def _head_oid(root: Path) -> str:
         _run_git(root, "rev-parse", "--verify", "HEAD^{commit}"), "HEAD identity"
     )
     if _OID_RE.fullmatch(value) is None:
-        raise Failure("Git returned an invalid HEAD identity", EXIT_POLICY)
+        raise _policy("Git returned an invalid HEAD identity")
     return value
 
 
@@ -288,9 +263,9 @@ def assert_git_root(root: Path) -> None:
             strict=True
         )
     except (OSError, ValueError):
-        raise Failure("Git returned an invalid repository root", EXIT_POLICY) from None
+        raise _policy("Git returned an invalid repository root") from None
     if top != canonical:
-        raise Failure("selected root is not the Git repository root", EXIT_POLICY)
+        raise _policy("selected root is not the Git repository root")
 
 
 def assert_head(root: Path, oid: str) -> None:
@@ -300,6 +275,103 @@ def assert_head(root: Path, oid: str) -> None:
     assert_git_root(canonical)
     if _head_oid(canonical) != oid:
         raise Failure("Git HEAD changed during compaction", EXIT_CONFLICT)
+
+
+def assert_clean_worktree(root: Path) -> None:
+    canonical = validate_repo_root(root)
+    assert_git_root(canonical)
+    output = _run_git(
+        canonical,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=normal",
+    )
+    if output:
+        raise _policy("migration requires a clean integration worktree")
+
+
+def _ref_oid(root: Path, reference: str, label: str) -> str:
+    try:
+        output = _run_git(root, "show-ref", "--verify", "--hash", reference)
+    except Failure:
+        raise _policy(f"{label} is not locally available") from None
+    value = _one_line(output, f"{label} identity")
+    if _OID_RE.fullmatch(value) is None:
+        raise _policy(f"Git returned an invalid {label} identity")
+    return value
+
+
+def _local_branch(root: Path) -> str:
+    try:
+        branch = _one_line(
+            _run_git(root, "symbolic-ref", "--quiet", "HEAD"),
+            "local branch",
+            filesystem=True,
+        )
+    except Failure:
+        raise _policy("migration requires a real local branch") from None
+    if not branch.startswith("refs/heads/"):
+        raise _policy("migration requires a real local branch")
+    return branch
+
+
+def _local_configured(root: Path, key: str) -> bool:
+    output = _run_git(
+        root,
+        "config",
+        "--local",
+        "--includes",
+        "--get",
+        key,
+        allow_one=True,
+    )
+    return bool(output and _one_line(output, "branch configuration", filesystem=True))
+
+
+def assert_no_divergence_branch(root: Path, expected_oid: str) -> None:
+    canonical = validate_repo_root(root)
+    if _OID_RE.fullmatch(expected_oid) is None:
+        raise Failure("captured HEAD identity is invalid", EXIT_USAGE)
+    assert_git_root(canonical)
+    branch = _local_branch(canonical)
+    short_branch = branch.removeprefix("refs/heads/")
+    remote_configured = _local_configured(canonical, f"branch.{short_branch}.remote")
+    if remote_configured != _local_configured(
+        canonical, f"branch.{short_branch}.merge"
+    ):
+        raise _policy("migration branch has incomplete upstream configuration")
+    upstream: str | None = None
+    if remote_configured:
+        try:
+            upstream = _one_line(
+                _run_git(
+                    canonical,
+                    "rev-parse",
+                    "--verify",
+                    "--symbolic-full-name",
+                    "@{upstream}",
+                ),
+                "upstream",
+                filesystem=True,
+            )
+        except Failure:
+            raise _policy("configured upstream is not locally available") from None
+        if not upstream.startswith(("refs/heads/", "refs/remotes/")):
+            raise _policy("Git returned an invalid configured upstream")
+        if _ref_oid(canonical, upstream, "configured upstream") != expected_oid:
+            raise _policy(
+                "migration requires local HEAD to equal its locally available upstream"
+            )
+    if (
+        _local_branch(canonical) != branch
+        or _ref_oid(canonical, branch, "local branch") != expected_oid
+        or (
+            upstream is not None
+            and _ref_oid(canonical, upstream, "configured upstream") != expected_oid
+        )
+    ):
+        raise _policy("Git branch topology changed during migration proof")
 
 
 def _tree_entry(root: Path, head_oid: str, relative: str) -> tuple[str, str]:
@@ -313,27 +385,39 @@ def _tree_entry(root: Path, head_oid: str, relative: str) -> tuple[str, str]:
         f":(literal){relative}",
     )
     if not output or output.count(b"\0") != 1 or not output.endswith(b"\0"):
-        raise Failure(
-            "progress log is missing or ambiguous in raw Git HEAD", EXIT_POLICY
-        )
+        raise _policy("progress log is missing or ambiguous in raw Git HEAD")
     try:
         metadata, path = output[:-1].split(b"\t", 1)
         mode, object_type, blob_oid = metadata.split(b" ", 2)
     except ValueError:
-        raise Failure("Git returned an invalid tree entry", EXIT_POLICY) from None
+        raise _policy("Git returned an invalid tree entry") from None
     if path != relative.encode("utf-8"):
-        raise Failure("Git returned an unexpected tree path", EXIT_POLICY)
+        raise _policy("Git returned an unexpected tree path")
+    if object_type != b"blob" or mode not in {b"100644", b"100755"}:
+        raise _policy("Git HEAD path is not a regular file")
     try:
-        mode_text = mode.decode("ascii")
-        type_text = object_type.decode("ascii")
         oid_text = blob_oid.decode("ascii")
     except UnicodeDecodeError:
-        raise Failure("Git returned an invalid tree entry", EXIT_POLICY) from None
-    if type_text != "blob" or mode_text not in {"100644", "100755"}:
-        raise Failure("Git HEAD path is not a regular file", EXIT_POLICY)
+        raise _policy("Git returned an invalid tree entry") from None
     if _OID_RE.fullmatch(oid_text) is None:
-        raise Failure("Git returned an invalid blob identity", EXIT_POLICY)
-    return oid_text, mode_text
+        raise _policy("Git returned an invalid blob identity")
+    return oid_text, mode.decode()
+
+
+def _blob_data(root: Path, blob_oid: str, *, base: bool) -> bytes:
+    label = "base " if base else ""
+    raw = _one_line(_run_git(root, "cat-file", "-s", blob_oid), f"{label}blob size")
+    if not raw.isdecimal():
+        raise _policy(f"Git returned an invalid {label}blob size")
+    size = int(raw)
+    source = "base" if base else "Git HEAD"
+    if size > MAX_DOCUMENT_BYTES:
+        raise _policy(f"{source} progress log exceeds the read bound")
+    data = _run_git(root, "cat-file", "blob", blob_oid, stdout_limit=MAX_DOCUMENT_BYTES)
+    if len(data) != size:
+        source = "base log" if base else "raw HEAD"
+        raise _policy(f"Git returned incomplete {source} bytes")
+    return data
 
 
 def load_head_log(root: Path, relative: str = "progress-log.md") -> HeadLog:
@@ -342,22 +426,25 @@ def load_head_log(root: Path, relative: str = "progress-log.md") -> HeadLog:
     assert_git_root(canonical)
     head_oid = _head_oid(canonical)
     blob_oid, mode_text = _tree_entry(canonical, head_oid, relative)
-
-    raw_size = _one_line(_run_git(canonical, "cat-file", "-s", blob_oid), "blob size")
-    if not raw_size.isdecimal():
-        raise Failure("Git returned an invalid blob size", EXIT_POLICY)
-    size = int(raw_size)
-    if size > MAX_DOCUMENT_BYTES:
-        raise Failure("Git HEAD progress log exceeds the read bound", EXIT_POLICY)
-    data = _run_git(
-        canonical,
-        "cat-file",
-        "blob",
-        blob_oid,
-        stdout_limit=MAX_DOCUMENT_BYTES,
-    )
-    if len(data) != size:
-        raise Failure("Git returned incomplete raw HEAD bytes", EXIT_POLICY)
+    data = _blob_data(canonical, blob_oid, base=False)
     assert_head(canonical, head_oid)
-    mode = 0o644 if mode_text == "100644" else 0o755
-    return HeadLog(head_oid, blob_oid, data, mode)
+    return HeadLog(head_oid, blob_oid, data, int(mode_text[-3:], 8))
+
+
+def load_commit_log(root: Path, oid: str, relative: str = "progress-log.md") -> HeadLog:
+    canonical = validate_repo_root(root)
+    safe_document_path(canonical, relative, allow_missing=True)
+    if not isinstance(oid, str) or _OID_RE.fullmatch(oid) is None:
+        raise Failure(
+            "base commit must be one full lowercase 40- or 64-hex object ID",
+            EXIT_USAGE,
+        )
+    assert_git_root(canonical)
+    object_type = _one_line(
+        _run_git(canonical, "cat-file", "-t", oid), "base object type"
+    )
+    if object_type != "commit":
+        raise _policy("base object ID does not identify a commit")
+    blob_oid, mode_text = _tree_entry(canonical, oid, relative)
+    data = _blob_data(canonical, blob_oid, base=True)
+    return HeadLog(oid, blob_oid, data, int(mode_text[-3:], 8))

@@ -1,6 +1,4 @@
 #!/usr/bin/env -S python3 -I -S -B
-"""Run the bundled progress-log command."""
-
 import sys
 
 _EXIT_POLICY = 76
