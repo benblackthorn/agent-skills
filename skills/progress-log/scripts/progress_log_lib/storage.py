@@ -1,7 +1,3 @@
-"""Progress-log POSIX storage."""
-
-from __future__ import annotations
-
 import errno
 import fcntl
 import hashlib
@@ -10,7 +6,7 @@ import stat
 import sys
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -20,23 +16,26 @@ from .model import EXIT_CONFLICT, EXIT_PATH, EXIT_USAGE, EXIT_WRITE, Failure
 MAX_DOCUMENT_BYTES = 1_048_576
 MAX_RELATIVE_PATH_BYTES = 1_024
 MAX_RELATIVE_PATH_DEPTH = 32
-_READ_CHUNK = 65_536
 
 
 @dataclass(frozen=True)
 class Snapshot:
     digest: str
     mode: int
-    device: int
-    inode: int
-    size: int
-    mtime_ns: int
-    ctime_ns: int
-    links: int
+    identity: tuple[int, ...]
 
 
 def _path_failure(message: str) -> Failure:
     return Failure(message, EXIT_PATH)
+
+
+def _inode(info: os.stat_result) -> tuple[int, int]:
+    return info.st_dev, info.st_ino
+
+
+def _absolute(path: Path) -> Path:
+    selected = path.expanduser()
+    return selected if selected.is_absolute() else Path.cwd() / selected
 
 
 def validate_repo_root(path: Path) -> Path:
@@ -47,36 +46,29 @@ def validate_repo_root(path: Path) -> Path:
     selected = path.expanduser().absolute()
     try:
         selected_info = selected.lstat()
-    except OSError:
-        raise _path_failure("repository root is unavailable") from None
-    if stat.S_ISLNK(selected_info.st_mode) or not stat.S_ISDIR(selected_info.st_mode):
-        raise _path_failure("repository root must be one real directory")
-    try:
         root = selected.resolve(strict=True)
         resolved_info = root.lstat()
     except OSError:
-        raise _path_failure("repository root cannot be resolved") from None
-    if stat.S_ISLNK(resolved_info.st_mode) or not stat.S_ISDIR(resolved_info.st_mode):
-        raise _path_failure("repository root must resolve to one real directory")
-    if (selected_info.st_dev, selected_info.st_ino) != (
-        resolved_info.st_dev,
-        resolved_info.st_ino,
+        raise _path_failure("repository root is unavailable") from None
+    if (
+        stat.S_ISLNK(selected_info.st_mode)
+        or not stat.S_ISDIR(selected_info.st_mode)
+        or stat.S_ISLNK(resolved_info.st_mode)
+        or not stat.S_ISDIR(resolved_info.st_mode)
+        or _inode(selected_info) != _inode(resolved_info)
     ):
-        raise _path_failure("repository root changed while it was selected")
+        raise _path_failure("repository root is not one stable real directory")
     return root
 
 
 def _relative_text(relative: str | Path) -> str:
-    if isinstance(relative, Path):
-        value = relative.as_posix()
-    elif isinstance(relative, str):
-        value = relative
-    else:
+    if not isinstance(relative, (str, Path)):
         raise _path_failure("document path must be repository-relative text")
+    value = relative.as_posix() if isinstance(relative, Path) else relative
     try:
         encoded = value.encode("utf-8", errors="strict")
     except UnicodeEncodeError:
-        raise _path_failure("document path is not valid UTF-8") from None
+        raise _path_failure("document path is unsafe") from None
     path = PurePosixPath(value)
     if (
         not value
@@ -90,7 +82,7 @@ def _relative_text(relative: str | Path) -> str:
         or any(part in {"", ".", ".."} for part in path.parts)
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
-        raise _path_failure("document path is not a safe repository-relative path")
+        raise _path_failure("document path is unsafe")
     return value
 
 
@@ -100,6 +92,7 @@ def safe_document_path(
     canonical = validate_repo_root(root)
     value = _relative_text(relative)
     parts = PurePosixPath(value).parts
+    target = canonical.joinpath(*parts)
     cursor = canonical
     for index, part in enumerate(parts):
         cursor /= part
@@ -108,27 +101,69 @@ def safe_document_path(
             info = cursor.lstat()
         except FileNotFoundError:
             if allow_missing:
-                return canonical.joinpath(*parts)
+                return target
             raise _path_failure("document path is missing") from None
         except OSError:
             raise _path_failure("cannot inspect document path") from None
-        if stat.S_ISLNK(info.st_mode):
-            raise _path_failure("document path contains a symbolic link")
-        if not final:
-            if not stat.S_ISDIR(info.st_mode):
-                raise _path_failure("document path ancestor is not a directory")
-            continue
-        if not stat.S_ISREG(info.st_mode):
-            raise _path_failure("document path is not a regular file")
-        if info.st_nlink != 1:
-            raise _path_failure("document path is multiply linked")
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or (not final and not stat.S_ISDIR(info.st_mode))
+            or (final and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1))
+        ):
+            raise _path_failure("document path is linked or has the wrong file type")
     return cursor
+
+
+def safe_scope_directory(root: Path, scope: str) -> Path:
+    canonical = validate_repo_root(root)
+    if scope == ".":
+        return canonical
+    value = _relative_text(scope)
+    parts = PurePosixPath(value).parts
+    cursor = canonical
+    for part in parts:
+        cursor /= part
+        try:
+            before = cursor.lstat()
+        except OSError:
+            raise _path_failure(f"active scope is unavailable: {scope}") from None
+        if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode):
+            raise _path_failure(f"active scope is not a real directory: {scope}")
+    try:
+        resolved = cursor.resolve(strict=True)
+        after = resolved.lstat()
+    except OSError:
+        raise _path_failure(f"active scope is unavailable: {scope}") from None
+    if (
+        resolved != cursor
+        or stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISDIR(after.st_mode)
+        or _inode(before) != _inode(after)
+    ):
+        raise _path_failure(f"active scope changed while selected: {scope}")
+    return cursor
+
+
+def scope_directory_identity(root: Path, scope: str) -> tuple[int, int]:
+    path = safe_scope_directory(root, scope)
+    try:
+        before = path.lstat()
+        safe_scope_directory(root, scope)
+        after = path.lstat()
+    except OSError:
+        raise _path_failure(f"active scope is unavailable: {scope}") from None
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISDIR(after.st_mode)
+        or _inode(before) != _inode(after)
+    ):
+        raise _path_failure(f"active scope changed while selected: {scope}")
+    return _inode(after)
 
 
 def _regular_identity(info: os.stat_result) -> tuple[int, ...]:
     return (
-        info.st_dev,
-        info.st_ino,
+        *_inode(info),
         info.st_mode,
         info.st_nlink,
         info.st_size,
@@ -137,29 +172,29 @@ def _regular_identity(info: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _snapshot(data: bytes, info: os.stat_result) -> Snapshot:
-    return Snapshot(
-        hashlib.sha256(data).hexdigest(),
-        stat.S_IMODE(info.st_mode),
-        info.st_dev,
-        info.st_ino,
-        info.st_size,
-        info.st_mtime_ns,
-        info.st_ctime_ns,
-        info.st_nlink,
-    )
+def regular_file_identity(path: Path) -> tuple[int, ...]:
+    path = _checked_path(path)
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        raise _path_failure("document is missing") from None
+    except OSError:
+        raise _path_failure("cannot inspect document") from None
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) & ~0o777
+    ):
+        raise _path_failure("document is not one safe regular file")
+    return _regular_identity(info)
 
 
 def resolve_user_path(root_value: Path, root: Path, path: Path) -> Path:
-    """Map root aliases; checked I/O rejects any unusable result."""
     selected = path
     try:
-        selected = path.expanduser()
-        if not selected.is_absolute():
-            selected = Path.cwd() / selected
-        alias = root_value.expanduser()
-        if not alias.is_absolute():
-            alias = Path.cwd() / alias
+        selected = _absolute(path)
+        alias = _absolute(root_value)
         if ".." in selected.parts:
             return selected
         if selected.is_relative_to(alias):
@@ -168,7 +203,6 @@ def resolve_user_path(root_value: Path, root: Path, path: Path) -> Path:
             return selected
         return selected.parent.resolve(strict=True) / selected.name
     except (OSError, RuntimeError):
-        # Downstream _checked_path rejects unresolved or unsafe results.
         return selected
 
 
@@ -176,9 +210,7 @@ def _checked_path(path: Path) -> Path:
     if not isinstance(path, Path):
         raise _path_failure("document path contains unsafe traversal")
     try:
-        selected = path.expanduser()
-        if not selected.is_absolute():
-            selected = Path.cwd() / selected
+        selected = _absolute(path)
     except (OSError, RuntimeError):
         raise _path_failure("document path cannot be made absolute") from None
     if ".." in selected.parts:
@@ -213,60 +245,51 @@ def read_snapshot(
         raise _path_failure("document is missing") from None
     except OSError:
         raise _path_failure("cannot inspect document") from None
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
-        raise _path_failure(
-            "document must be one regular file, not a link or special file"
-        )
-    if before.st_nlink != 1:
-        raise _path_failure("document must not have multiple hard links")
-    if stat.S_IMODE(before.st_mode) & ~0o777:
-        raise _path_failure("document has unsupported special mode bits")
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) & ~0o777
+    ):
+        raise _path_failure("document is not one safe regular file")
     if before.st_size > MAX_DOCUMENT_BYTES:
         raise _path_failure(f"document exceeds {MAX_DOCUMENT_BYTES} UTF-8 bytes")
 
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except OSError:
         raise _path_failure("cannot open document safely") from None
-    try:
+    with os.fdopen(descriptor, "rb") as source:
         opened = os.fstat(descriptor)
         if _regular_identity(before) != _regular_identity(opened):
             raise Failure("document changed while it was opened", EXIT_CONFLICT)
-        chunks = bytearray()
-        while len(chunks) <= MAX_DOCUMENT_BYTES:
-            amount = min(_READ_CHUNK, MAX_DOCUMENT_BYTES + 1 - len(chunks))
-            chunk = os.read(descriptor, amount)
-            if not chunk:
-                break
-            chunks.extend(chunk)
+        data = source.read(MAX_DOCUMENT_BYTES + 1)
         after = os.fstat(descriptor)
-        if len(chunks) > MAX_DOCUMENT_BYTES:
+        if len(data) > MAX_DOCUMENT_BYTES:
             raise _path_failure(f"document exceeds {MAX_DOCUMENT_BYTES} UTF-8 bytes")
         if (
             _regular_identity(opened) != _regular_identity(after)
-            or len(chunks) != after.st_size
+            or len(data) != after.st_size
         ):
             raise Failure("document changed while it was read", EXIT_CONFLICT)
-        data = bytes(chunks)
-        return data, _snapshot(data, after)
-    finally:
-        os.close(descriptor)
+        return data, Snapshot(
+            hashlib.sha256(data).hexdigest(),
+            stat.S_IMODE(after.st_mode),
+            _regular_identity(after),
+        )
 
 
 def _open_directory(path: Path) -> int:
     path = _checked_path(path / "unused").parent
     before = path.lstat()
-    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(
+            path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
     except OSError:
         raise _path_failure("cannot open repository directory safely") from None
     after = os.fstat(descriptor)
-    if not stat.S_ISDIR(after.st_mode) or (before.st_dev, before.st_ino) != (
-        after.st_dev,
-        after.st_ino,
-    ):
+    if not stat.S_ISDIR(after.st_mode) or _inode(before) != _inode(after):
         os.close(descriptor)
         raise _path_failure("repository directory changed while it was opened")
     return descriptor
@@ -281,16 +304,13 @@ def locked_repo(root: Path, exclusive: bool, timeout: float = 10.0) -> Iterator[
         or timeout < 0
     ):
         raise Failure("lock mode or timeout is invalid", EXIT_USAGE)
-    # Lock the directory so crashes leave no lockfile residue.
     descriptor = _open_directory(canonical)
     operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
     deadline = time.monotonic() + float(timeout)
-    acquired = False
     try:
         while True:
             try:
                 fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
-                acquired = True
                 break
             except OSError as exc:
                 if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}:
@@ -305,9 +325,8 @@ def locked_repo(root: Path, exclusive: bool, timeout: float = 10.0) -> Iterator[
                 time.sleep(min(0.025, remaining))
         yield canonical
     finally:
-        if acquired:
-            with suppress(OSError):
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        with suppress(OSError):
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
 
@@ -316,29 +335,23 @@ def atomic_replace(
     data: bytes,
     expected: Snapshot | None,
     mode: int | None = None,
+    pre_replace: Callable[[], None] | None = None,
 ) -> Snapshot:
     if not isinstance(path, Path) or not isinstance(data, bytes):
         raise Failure("atomic replacement requires a path and bytes", EXIT_USAGE)
     path = _checked_path(path)
     if len(data) > MAX_DOCUMENT_BYTES:
         raise Failure(f"replacement exceeds {MAX_DOCUMENT_BYTES} bytes", EXIT_WRITE)
-    selected_mode = expected.mode if expected is not None and mode is None else mode
-    if selected_mode is None:
-        selected_mode = 0o644
-    if not isinstance(selected_mode, int) or selected_mode < 0 or selected_mode > 0o777:
+    selected_mode = mode if mode is not None else expected.mode if expected else 0o644
+    if not isinstance(selected_mode, int) or not 0 <= selected_mode <= 0o777:
         raise Failure("replacement mode must contain only permission bits", EXIT_USAGE)
-
     parent_info = path.parent.lstat()
     directory = _open_directory(path.parent)
     opened_parent = os.fstat(directory)
-    if (parent_info.st_dev, parent_info.st_ino) != (
-        opened_parent.st_dev,
-        opened_parent.st_ino,
-    ):
+    if _inode(parent_info) != _inode(opened_parent):
         os.close(directory)
         raise _path_failure("document parent changed before replacement")
 
-    descriptor = -1
     temporary: Path | None = None
     try:
         try:
@@ -346,36 +359,26 @@ def atomic_replace(
                 prefix=f".{path.name}.tmp-", dir=path.parent
             )
             temporary = Path(raw_name)
-            offset = 0
-            while offset < len(data):
-                written = os.write(descriptor, data[offset:])
-                if written <= 0:
+            with os.fdopen(descriptor, "wb") as staging:
+                if staging.write(data) != len(data):
                     raise OSError("short write while staging replacement")
-                offset += written
-            os.fchmod(descriptor, selected_mode)
-            os.fsync(descriptor)
+                staging.flush()
+                os.fchmod(descriptor, selected_mode)
+                os.fsync(descriptor)
         except OSError:
             raise Failure("cannot stage replacement", EXIT_WRITE) from None
-        finally:
-            if descriptor >= 0:
-                os.close(descriptor)
-                descriptor = -1
 
         _, current = read_snapshot(path, missing_ok=True)
         if current != expected:
             raise Failure("document changed before replacement", EXIT_CONFLICT)
+        if pre_replace is not None:
+            pre_replace()
         try:
             os.replace(temporary, path)
             temporary = None
         except OSError:
             raise _classify_post_replace_failure(
-                path,
-                data,
-                selected_mode,
-                expected,
-                "replacement could not be installed; destination is unchanged",
-                "replacement installed, but durability is unconfirmed",
-                "replacement state is ambiguous after installation failure",
+                path, data, selected_mode, expected, "installation"
             ) from None
 
         try:
@@ -390,31 +393,17 @@ def atomic_replace(
                 )
         except Failure:
             raise _classify_post_replace_failure(
-                path,
-                data,
-                selected_mode,
-                expected,
-                "replacement verification failed; destination is unchanged",
-                "replacement installed, but post-install verification failed",
-                "replacement state is ambiguous after post-install verification failure",
+                path, data, selected_mode, expected, "verification"
             ) from None
 
         try:
             os.fsync(directory)
         except OSError:
             raise _classify_post_replace_failure(
-                path,
-                data,
-                selected_mode,
-                expected,
-                "directory sync failed; destination is unchanged",
-                "replacement installed, but directory sync failed",
-                "replacement state is ambiguous after directory sync failure",
+                path, data, selected_mode, expected, "directory sync"
             ) from None
         return installed
     finally:
-        if descriptor >= 0:
-            os.close(descriptor)
         if temporary is not None:
             with suppress(OSError):
                 temporary.unlink()
@@ -428,16 +417,23 @@ def _classify_post_replace_failure(
     data: bytes,
     mode: int,
     expected: Snapshot | None,
-    unchanged_message: str,
-    installed_message: str,
-    ambiguous_message: str,
+    phase: str,
 ) -> Failure:
     try:
         installed_data, installed = read_snapshot(path, missing_ok=True)
     except Failure:
-        return Failure(ambiguous_message, EXIT_WRITE, changed=None)
+        return Failure(
+            f"replacement state is ambiguous after {phase} failure",
+            EXIT_WRITE,
+            changed=None,
+        )
     if installed == expected:
-        return Failure(unchanged_message, EXIT_WRITE, changed=False)
-    if installed is not None and installed_data == data and installed.mode == mode:
-        return Failure(installed_message, EXIT_WRITE, changed=True)
-    return Failure(ambiguous_message, EXIT_WRITE, changed=None)
+        changed: bool | None = False
+        state = "destination is unchanged"
+    elif installed is not None and installed_data == data and installed.mode == mode:
+        changed = True
+        state = "replacement installed"
+    else:
+        changed = None
+        state = "replacement state is ambiguous"
+    return Failure(f"{state} after {phase} failure", EXIT_WRITE, changed=changed)

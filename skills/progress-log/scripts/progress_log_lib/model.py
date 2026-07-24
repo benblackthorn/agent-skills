@@ -1,7 +1,3 @@
-"""Progress-log models."""
-
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -36,6 +32,7 @@ class Entry:
     operation_digest: str | None = None
     opens: tuple[str, ...] = ()
     closes: tuple[str, ...] = ()
+    scope: str = "."
 
     @property
     def sort_key(self) -> tuple[datetime, str]:
@@ -52,5 +49,40 @@ class ProgressLog:
 
 
 @dataclass(frozen=True)
+class ContextSource:
+    scope: str
+    path: str
+
+
+@dataclass(frozen=True)
+class Orientation:
+    scope: str
+    key: str
+    value: str
+
+
+@dataclass(frozen=True)
+class Workstream:
+    scope: str
+    key: str
+    objective: str
+    checkpoint: str
+    next: str
+    blocker: str
+
+
+@dataclass(frozen=True)
+class ProgressLogV2:
+    log_id: str
+    sources: tuple[ContextSource, ...] = ()
+    state: tuple[Orientation, ...] = ()
+    workstreams: tuple[Workstream, ...] = ()
+    entries: tuple[Entry, ...] = ()
+
+
+@dataclass(frozen=True)
 class OptOut:
     pass
+
+
+CanonicalLog = ProgressLog | ProgressLogV2
