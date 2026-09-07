@@ -35,6 +35,7 @@ jobs:
             --output "$archive"
           echo "83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60  $archive" \
             | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/gh_2.96.0_linux_amd64/bin" >> "$GITHUB_PATH"
 
       - name: Check package discovery and changed bytes
