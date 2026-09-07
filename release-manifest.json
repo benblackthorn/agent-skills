@@ -1,0 +1,127 @@
+{
+  "audience": "public",
+  "candidates": [
+    {
+      "candidate": "1bed33531d7c223156d571105a6721c73e20fa6eac3429311a2ab847fc567e00",
+      "name": "progress-log"
+    }
+  ],
+  "directories": [
+    {
+      "mode": 493,
+      "path": "skills"
+    },
+    {
+      "mode": 493,
+      "path": "skills/progress-log"
+    },
+    {
+      "mode": 493,
+      "path": "skills/progress-log/agents"
+    },
+    {
+      "mode": 493,
+      "path": "skills/progress-log/references"
+    },
+    {
+      "mode": 493,
+      "path": "skills/progress-log/scripts"
+    },
+    {
+      "mode": 493,
+      "path": "skills/progress-log/scripts/progress_log_lib"
+    }
+  ],
+  "distributionIdentity": "e265600ae11e8c837b520e1e03e7b32d8db37ffc257524c649c122292646b30c",
+  "expectedCommitPaths": [
+    "skills/progress-log/LICENSE",
+    "skills/progress-log/SKILL.md",
+    "skills/progress-log/agents/openai.yaml",
+    "skills/progress-log/references/format.md",
+    "skills/progress-log/scripts/progress_log.py",
+    "skills/progress-log/scripts/progress_log_lib/__init__.py",
+    "skills/progress-log/scripts/progress_log_lib/commands.py",
+    "skills/progress-log/scripts/progress_log_lib/format.py",
+    "skills/progress-log/scripts/progress_log_lib/git_support.py",
+    "skills/progress-log/scripts/progress_log_lib/model.py",
+    "skills/progress-log/scripts/progress_log_lib/storage.py",
+    "release-manifest.json"
+  ],
+  "files": [
+    {
+      "mode": 420,
+      "path": "skills/progress-log/LICENSE",
+      "sha256": "3339c76c8986a1501c7d2f3177fe61ef7780506c5c97ebd6a551b4e1dab40e12"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/SKILL.md",
+      "sha256": "154505e2cb8d689adf4b9896c29516742fc466c4bff09fb0c824cf576dfd2550"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/agents/openai.yaml",
+      "sha256": "f3d40e34d10e0c103cac6edf637e02e7475fc5b8bc974be9a32a2c318d8ffd34"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/references/format.md",
+      "sha256": "567a6ad72f068602805573bc8b4ecf4c8a25abcfd56b83c382118ff4e284c958"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log.py",
+      "sha256": "2d2e11aafae70c503fa92511ba3e9b6ca0abd16a37d3f7eab30208b32141b5b0"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/commands.py",
+      "sha256": "9d0002d7ddb416ba4baa22caa98d0d5a8337b986eccba626262593fd60641deb"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/format.py",
+      "sha256": "3796c3370635e8c48af82b327dfce84fe7de2cdebec5fdb81dc30598cecaaa54"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/git_support.py",
+      "sha256": "b89d0eede866f8c6893257708a5647eb94c5b72dc7680698ab38bf303a34c10f"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/model.py",
+      "sha256": "03693627e6738a3b8673a4b31e78e31b332e5562af0a9c44bf29d9dd027c5e81"
+    },
+    {
+      "mode": 420,
+      "path": "skills/progress-log/scripts/progress_log_lib/storage.py",
+      "sha256": "2d2ad24929e81fd5c57922848eb86559c39dbfa14dadf6654a583a65ff93c61c"
+    }
+  ],
+  "kind": "release-manifest",
+  "payloadDigest": "b16adbfec6c9b3e0bcb2ab27390fc7d71bec7df6c9ebb6b0315a7536db298c1a",
+  "preReleaseHead": "f3d8114562938b4d79018613631243f104fcfc84",
+  "releaseId": "f465db45cf4db23ce6e0dd81486473cf80b5bfa803517f2d55bc80cf1f66511b",
+  "releaseSetDigest": "20742efd9f872016a8e53a45485452336738534d17ed65c2a295b8118e12767e",
+  "remoteBinding": {
+    "fetchUrlDigests": [
+      "7ab3bb1f8e1a1a8ba08d1209466540d826be15eb08648492e11462f9494db8cf"
+    ],
+    "nameDigest": "181fdd46fc4a7246b9f4f1eba3129ba5d724011af5f10223b3589955d1df108a",
+    "pushUrlDigests": [
+      "7ab3bb1f8e1a1a8ba08d1209466540d826be15eb08648492e11462f9494db8cf"
+    ]
+  },
+  "reviewDigest": "e62ba08abf6aee0c624633583c3fe2ea9d53a27ebc18d094c5cd3d4c4d98a439",
+  "schema": "remek.2",
+  "sourceBranchDigest": "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605",
+  "sourceCommit": "419d83b3be712a9aa80ccf41bba12383f97605b0",
+  "sourceRepositoryIdentity": "e0dbf37335ceef0ccd84e12118b4111c2349a16651c461a97a98d5125336a655",
+  "targetVerificationDigest": "a191a3fd3c0f16bb5361e88a2a394e73efc3533f6f9755e8b0e447d0c34c7e55"
+}
