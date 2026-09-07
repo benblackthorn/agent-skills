@@ -34,17 +34,6 @@
   ],
   "distributionIdentity": "e265600ae11e8c837b520e1e03e7b32d8db37ffc257524c649c122292646b30c",
   "expectedCommitPaths": [
-    "skills/progress-log/LICENSE",
-    "skills/progress-log/SKILL.md",
-    "skills/progress-log/agents/openai.yaml",
-    "skills/progress-log/references/format.md",
-    "skills/progress-log/scripts/progress_log.py",
-    "skills/progress-log/scripts/progress_log_lib/__init__.py",
-    "skills/progress-log/scripts/progress_log_lib/commands.py",
-    "skills/progress-log/scripts/progress_log_lib/format.py",
-    "skills/progress-log/scripts/progress_log_lib/git_support.py",
-    "skills/progress-log/scripts/progress_log_lib/model.py",
-    "skills/progress-log/scripts/progress_log_lib/storage.py",
     "release-manifest.json"
   ],
   "files": [
@@ -106,8 +95,8 @@
   ],
   "kind": "release-manifest",
   "payloadDigest": "b16adbfec6c9b3e0bcb2ab27390fc7d71bec7df6c9ebb6b0315a7536db298c1a",
-  "preReleaseHead": "f3d8114562938b4d79018613631243f104fcfc84",
-  "releaseId": "f465db45cf4db23ce6e0dd81486473cf80b5bfa803517f2d55bc80cf1f66511b",
+  "preReleaseHead": "76ae108a8295c708b4061e979f6a7dc6bdbf209b",
+  "releaseId": "fef65f5f1978b3d219cfcb0cde4ffe8099dd722d356d27278967d114a8de4d2e",
   "releaseSetDigest": "20742efd9f872016a8e53a45485452336738534d17ed65c2a295b8118e12767e",
   "remoteBinding": {
     "fetchUrlDigests": [
@@ -121,7 +110,7 @@
   "reviewDigest": "e62ba08abf6aee0c624633583c3fe2ea9d53a27ebc18d094c5cd3d4c4d98a439",
   "schema": "remek.2",
   "sourceBranchDigest": "0d6e4079e36703ebd37c00722f5891d28b0e2811dc114b129215123adcce3605",
-  "sourceCommit": "419d83b3be712a9aa80ccf41bba12383f97605b0",
+  "sourceCommit": "5a8f73b532ebcc610eb128e5a581d8eb990862b9",
   "sourceRepositoryIdentity": "e0dbf37335ceef0ccd84e12118b4111c2349a16651c461a97a98d5125336a655",
   "targetVerificationDigest": "a191a3fd3c0f16bb5361e88a2a394e73efc3533f6f9755e8b0e447d0c34c7e55"
 }
