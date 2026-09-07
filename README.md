@@ -19,9 +19,10 @@ and release layer for Agent Skills.
 
 ### [progress-log](skills/progress-log/)
 
-Durable, bounded repository memory for work that spans agents or sessions.
-Records completed outcomes, current state, open threads, and knowledge links
-with safe repair, Git-proved compaction, and conservative branch merging.
+Bounded repository working context for work that spans agents or sessions.
+Records scoped completed outcomes, current orientation, source pointers, and
+workstream handoffs with safe repair, Git-proved compaction, and conservative
+branch merging.
 
 Every skill’s `SKILL.md` is its source of truth for routing, workflow,
 compatibility, and exclusions. The catalog will expand without turning the

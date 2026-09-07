@@ -1,6 +1,6 @@
 # Security policy
 
-The latest commit on `main` is the supported release surface. Older pinned
+The latest commit on `remek-v2` is the supported release surface. Older pinned
 commits remain reproducible but do not receive fixes.
 
 ## Report a vulnerability
