@@ -5,7 +5,7 @@ on:
   pull_request:
   push:
     branches:
-      - main
+      - remek-v2
 
 permissions:
   contents: read
@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: benblackthorn/remek
-          ref: 21fc6985c492a92fff13c9ae4e716f84b83ce57a
+          ref: 7dbdd2996c4759629ebc2a7a01190fbc9af53ad4
           path: .tmp/remek-verifier
           persist-credentials: false
 
@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
 
